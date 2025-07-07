@@ -3,10 +3,9 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { add } from "date-fns";
-
-const dateFnsTz = require("date-fns-tz");
-const { zonedTimeToUtc } = dateFnsTz;
 import cron from "node-cron";
+import isURL from "validator/lib/isURL";
+import { nanoid } from "nanoid";
 
 declare global {
   namespace Express {
@@ -25,15 +24,14 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Timezone middleware
 app.use((req: Request, res: Response, next: any) => {
-  // Get timezone from request headers (automatically sent by browsers)
   const timezoneHeader = req.headers["x-timezone"] || req.headers["timezone"];
   const timezone = Array.isArray(timezoneHeader)
     ? timezoneHeader[0]
     : timezoneHeader;
 
-  // Store timezone info in request object
-  req.userTimezone = timezone;
+  req.userTimezone = timezone || undefined;
   next();
 });
 
@@ -44,76 +42,120 @@ const supabase = createClient(
 );
 
 function isValidUrl(url: string): boolean {
-  try {
-    // This will throw if url is invalid
-    new URL(url);
-    return true;
-  } catch {
-    return false;
+  return isURL(url, {
+    protocols: ["http", "https"],
+    require_protocol: true,
+    require_valid_protocol: true,
+  });
+}
+
+function normalizeUrl(url: string): string {
+  if (!/^https?:\/\//i.test(url)) {
+    return "https://" + url;
   }
+  return url;
 }
 
 function generateSlug(length = 7): string {
-  const chars =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let slug = "";
-  for (let i = 0; i < length; i++) {
-    slug += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return slug;
+  return nanoid(length);
 }
 
-function convertLocalToUTC(localTimeString: string, timezone?: string): Date {
-  if (!timezone) {
-    return new Date(localTimeString);
+async function generateUniqueSlug(
+  length = 7,
+  maxAttempts = 5
+): Promise<string> {
+  let slug: string;
+  let exists = true;
+  let attempts = 0;
+
+  while (exists && attempts < maxAttempts) {
+    slug = generateSlug(length);
+
+    const { data } = await supabase
+      .from("urls")
+      .select("id")
+      .eq("short_code", slug)
+      .maybeSingle();
+
+    exists = !!data;
+    attempts++;
   }
 
+  if (exists) {
+    throw new Error("Failed to generate unique slug after several attempts");
+  }
+
+  return slug!;
+}
+
+function convertLocalToUTC(localTimeString: string, timezone: string): Date {
   try {
-    return zonedTimeToUtc(localTimeString, timezone);
+    const parts = localTimeString.split(/[-T:]/).map(Number);
+    const [year, month, day, hour, minute] = parts;
+    const date = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+    const formatted = formatter.formatToParts(date);
+    const get = (type: string) =>
+      Number(formatted.find((f) => f.type === type)?.value ?? "0");
+
+    const tzDate = new Date(
+      Date.UTC(
+        get("year"),
+        get("month") - 1,
+        get("day"),
+        get("hour"),
+        get("minute"),
+        get("second")
+      )
+    );
+
+    const offset = tzDate.getTime() - date.getTime();
+    const utcDate = new Date(date.getTime() - offset);
+    return utcDate;
   } catch (error) {
-    console.error("Timezone conversion error:", error);
-    return new Date(localTimeString);
+    console.error("❌ Time conversion error:", error);
+    return new Date(localTimeString + "Z");
   }
 }
 
-app.get("/ping", (req: Request, res: Response) => {
-  res.send("pong");
-});
-
-app.post("/shorten", async (req: Request, res: Response): Promise<any> => {
+// Shorten URL route
+app.post("/shorten", async (req: Request, res: Response): Promise<Response> => {
   let { original_url, expires_at, relative_expiry, timezone } = req.body;
 
   if (!original_url) {
     return res.status(400).json({ error: "Missing original_url" });
   }
 
-  if (
-    !original_url.startsWith("http://") &&
-    !original_url.startsWith("https://")
-  ) {
-    original_url = "https://" + original_url;
-  }
+  // Normalize and validate URL
+  original_url = normalizeUrl(original_url);
 
   if (!isValidUrl(original_url)) {
     return res.status(400).json({ error: "Invalid URL format" });
   }
 
-  // Determine which timezone to use
-  const effectiveTimezone = timezone || req.userTimezone;
+  const effectiveTimezone = timezone || req.userTimezone || "UTC";
   let expiration: Date | null = null;
 
   if (expires_at) {
     expiration = convertLocalToUTC(expires_at, effectiveTimezone);
-
-    console.log(
-      `📍 Using timezone: ${effectiveTimezone || "Server local time"}`
-    );
-    console.log(`📅 Input expires_at: ${expires_at}`);
-    console.log(`🕒 UTC equivalent: ${expiration.toISOString()}`);
-    console.log(`🕒 Now (UTC): ${new Date().toISOString()}`);
-
     if (isNaN(expiration.getTime())) {
       return res.status(400).json({ error: "Invalid expires_at format" });
+    }
+    if (expiration <= new Date()) {
+      return res
+        .status(400)
+        .json({ error: "Expiration time must be in the future" });
     }
   } else if (relative_expiry) {
     const now = new Date();
@@ -129,7 +171,7 @@ app.post("/shorten", async (req: Request, res: Response): Promise<any> => {
     expiration = add(now, { [unit]: count });
   }
 
-  const short_code = generateSlug();
+  const short_code = await generateUniqueSlug(7);
 
   const { data, error } = await supabase
     .from("urls")
@@ -147,6 +189,7 @@ app.post("/shorten", async (req: Request, res: Response): Promise<any> => {
   });
 });
 
+// Redirect route
 app.get("/:slug", async (req, res): Promise<any> => {
   const { slug } = req.params;
 
@@ -158,7 +201,6 @@ app.get("/:slug", async (req, res): Promise<any> => {
 
   if (error || !data) return res.status(404).json({ error: "Not found" });
 
-  // Check for expiration using UTC time
   const now = new Date();
   if (data.expires_at && new Date(data.expires_at) < now) {
     console.log(
@@ -169,7 +211,6 @@ app.get("/:slug", async (req, res): Promise<any> => {
     return res.status(410).json({ error: "This link has expired." });
   }
 
-  // Increment click count
   const { error: updateError } = await supabase
     .from("urls")
     .update({ clicks: (data.clicks || 0) + 1 })
@@ -182,11 +223,7 @@ app.get("/:slug", async (req, res): Promise<any> => {
   res.redirect(data.original_url);
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`✅ Backend server is running at http://localhost:${PORT}`);
-});
-
+// Scheduled cleanup
 cron.schedule("*/2 * * * *", async () => {
   const now = new Date().toISOString();
   console.log(`🔍 Checking for expired URLs at ${now}`);
@@ -202,4 +239,9 @@ cron.schedule("*/2 * * * *", async () => {
   } else {
     console.log(`✅ Deleted ${data?.length || 0} expired URLs.`);
   }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`✅ Backend server is running at http://localhost:${PORT}`);
 });
