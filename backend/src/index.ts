@@ -88,6 +88,11 @@ async function generateUniqueSlug(
   return slug!;
 }
 
+function isValidCustomAlias(alias: string): boolean {
+  // Allow a-z, A-Z, 0-9, _, - and must be 3-30 chars
+  return /^[a-zA-Z0-9_-]{3,30}$/.test(alias);
+}
+
 function convertLocalToUTC(localTimeString: string, timezone: string): Date {
   try {
     const parts = localTimeString.split(/[-T:]/).map(Number);
@@ -131,7 +136,8 @@ function convertLocalToUTC(localTimeString: string, timezone: string): Date {
 
 // Shorten URL route
 app.post("/shorten", async (req: Request, res: Response): Promise<Response> => {
-  let { original_url, expires_at, relative_expiry, timezone } = req.body;
+  let { original_url, expires_at, relative_expiry, timezone, custom_alias } =
+    req.body;
 
   if (!original_url) {
     return res.status(400).json({ error: "Missing original_url" });
@@ -171,7 +177,28 @@ app.post("/shorten", async (req: Request, res: Response): Promise<Response> => {
     expiration = add(now, { [unit]: count });
   }
 
-  const short_code = await generateUniqueSlug(7);
+  let short_code: string;
+
+  if (custom_alias) {
+    custom_alias = custom_alias.toLowerCase();
+    if (!isValidCustomAlias(custom_alias)) {
+      return res.status(400).json({ error: "Invalid custom alias format" });
+    }
+
+    const { data: existingAlias } = await supabase
+      .from("urls")
+      .select("id")
+      .eq("short_code", custom_alias)
+      .maybeSingle();
+
+    if (existingAlias) {
+      return res.status(409).json({ error: "Custom alias already in use" });
+    }
+
+    short_code = custom_alias;
+  } else {
+    short_code = await generateUniqueSlug(7);
+  }
 
   const { data, error } = await supabase
     .from("urls")
