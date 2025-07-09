@@ -6,6 +6,7 @@ import { add } from "date-fns";
 import cron from "node-cron";
 import isURL from "validator/lib/isURL";
 import { nanoid } from "nanoid";
+import { createClient as createRedisClient } from "redis";
 
 declare global {
   namespace Express {
@@ -34,6 +35,15 @@ app.use((req: Request, res: Response, next: any) => {
   req.userTimezone = timezone || undefined;
   next();
 });
+
+const redisClient = createRedisClient({
+  url: process.env.REDIS_URL || "redis://localhost:6379",
+});
+
+redisClient.connect().catch(console.error);
+
+const RATE_LIMIT_WINDOW = 60; // seconds
+const MAX_REQUESTS_PER_WINDOW = 10; // max requests per IP per window
 
 // Supabase client
 const supabase = createClient(
@@ -149,94 +159,129 @@ function convertLocalToUTC(localTimeString: string, timezone: string): Date {
   }
 }
 
+async function rateLimiter(req: Request, res: Response, next: any) {
+  try {
+    const ip = req.ip || req.connection.remoteAddress || "unknown";
+
+    // Redis key for this IP and route
+    const redisKey = `rate_limit:${ip}`;
+
+    // Increment request count for this IP
+    const requests = await redisClient.incr(redisKey);
+
+    if (requests === 1) {
+      // Set expiration time on first request
+      await redisClient.expire(redisKey, RATE_LIMIT_WINDOW);
+    }
+
+    if (requests > MAX_REQUESTS_PER_WINDOW) {
+      return res.status(429).json({
+        error: `Rate limit exceeded. Try again in ${RATE_LIMIT_WINDOW} seconds.`,
+      });
+    }
+
+    next();
+  } catch (err) {
+    console.error("Rate limiter error:", err);
+    // Fail open — if Redis fails, allow the request
+    next();
+  }
+}
+
 // Shorten URL route
-app.post("/shorten", async (req: Request, res: Response): Promise<Response> => {
-  let { original_url, expires_at, relative_expiry, timezone, custom_alias } =
-    req.body;
+app.post(
+  "/shorten",
+  rateLimiter,
+  async (req: Request, res: Response): Promise<Response> => {
+    let { original_url, expires_at, relative_expiry, timezone, custom_alias } =
+      req.body;
 
-  if (!original_url) {
-    return res.status(400).json({ error: "Missing original_url" });
-  }
-
-  // Normalize and validate URL
-  original_url = normalizeUrl(original_url);
-
-  if (!isValidUrl(original_url)) {
-    return res.status(400).json({ error: "Invalid URL format" });
-  }
-
-  const effectiveTimezone = timezone || req.userTimezone || "UTC";
-  let expiration: Date | null = null;
-
-  if (expires_at) {
-    expiration = convertLocalToUTC(expires_at, effectiveTimezone);
-    if (isNaN(expiration.getTime())) {
-      return res.status(400).json({ error: "Invalid expires_at format" });
-    }
-    if (expiration <= new Date()) {
-      return res
-        .status(400)
-        .json({ error: "Expiration time must be in the future" });
-    }
-  } else if (relative_expiry) {
-    const now = new Date();
-    const { count, unit } = relative_expiry;
-
-    if (
-      !["days", "months", "years", "minutes", "hours"].includes(unit) ||
-      isNaN(count)
-    ) {
-      return res.status(400).json({ error: "Invalid relative_expiry format" });
+    if (!original_url) {
+      return res.status(400).json({ error: "Missing original_url" });
     }
 
-    expiration = add(now, { [unit]: count });
-  }
+    // Normalize and validate URL
+    original_url = normalizeUrl(original_url);
 
-  let short_code: string;
-
-  if (custom_alias) {
-    custom_alias = custom_alias.toLowerCase();
-
-    if (isReserved(custom_alias)) {
-      return res
-        .status(403)
-        .json({ error: "This custom alias is reserved and cannot be used." });
+    if (!isValidUrl(original_url)) {
+      return res.status(400).json({ error: "Invalid URL format" });
     }
 
-    if (!isValidCustomAlias(custom_alias)) {
-      return res.status(400).json({ error: "Invalid custom alias format" });
+    const effectiveTimezone = timezone || req.userTimezone || "UTC";
+    let expiration: Date | null = null;
+
+    if (expires_at) {
+      expiration = convertLocalToUTC(expires_at, effectiveTimezone);
+      if (isNaN(expiration.getTime())) {
+        return res.status(400).json({ error: "Invalid expires_at format" });
+      }
+      if (expiration <= new Date()) {
+        return res
+          .status(400)
+          .json({ error: "Expiration time must be in the future" });
+      }
+    } else if (relative_expiry) {
+      const now = new Date();
+      const { count, unit } = relative_expiry;
+
+      if (
+        !["days", "months", "years", "minutes", "hours"].includes(unit) ||
+        isNaN(count)
+      ) {
+        return res
+          .status(400)
+          .json({ error: "Invalid relative_expiry format" });
+      }
+
+      expiration = add(now, { [unit]: count });
     }
 
-    const { data: existingAlias } = await supabase
+    let short_code: string;
+
+    if (custom_alias) {
+      custom_alias = custom_alias.toLowerCase();
+
+      if (isReserved(custom_alias)) {
+        return res
+          .status(403)
+          .json({ error: "This custom alias is reserved and cannot be used." });
+      }
+
+      if (!isValidCustomAlias(custom_alias)) {
+        return res.status(400).json({ error: "Invalid custom alias format" });
+      }
+
+      const { data: existingAlias } = await supabase
+        .from("urls")
+        .select("id")
+        .eq("short_code", custom_alias)
+        .maybeSingle();
+
+      if (existingAlias) {
+        return res.status(409).json({ error: "Custom alias already in use" });
+      }
+
+      short_code = custom_alias;
+    } else {
+      short_code = (await generateUniqueSlug(7)).toLowerCase();
+    }
+
+    const { data, error } = await supabase
       .from("urls")
-      .select("id")
-      .eq("short_code", custom_alias)
-      .maybeSingle();
+      .insert([{ original_url, short_code, expires_at: expiration }])
+      .select()
+      .single();
 
-    if (existingAlias) {
-      return res.status(409).json({ error: "Custom alias already in use" });
+    if (error) {
+      return res.status(500).json({ error: error.message });
     }
 
-    short_code = custom_alias;
-  } else {
-    short_code = (await generateUniqueSlug(7)).toLowerCase();
+    return res.status(201).json({
+      short_url: `http://localhost:3000/${data.short_code}`,
+      expires_at_utc: expiration?.toISOString(),
+    });
   }
-
-  const { data, error } = await supabase
-    .from("urls")
-    .insert([{ original_url, short_code, expires_at: expiration }])
-    .select()
-    .single();
-
-  if (error) {
-    return res.status(500).json({ error: error.message });
-  }
-
-  return res.status(201).json({
-    short_url: `http://localhost:3000/${data.short_code}`,
-    expires_at_utc: expiration?.toISOString(),
-  });
-});
+);
 
 // Stats endpoint
 app.get("/stats/:slug", async (req: Request, res: Response) => {
