@@ -41,6 +41,21 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const RESERVED_WORDS = new Set([
+  "admin",
+  "login",
+  "signup",
+  "stats",
+  "api",
+  "shorten",
+  "auth",
+  "logout",
+]);
+
+function isReserved(word: string): boolean {
+  return RESERVED_WORDS.has(word.toLowerCase());
+}
+
 function isValidUrl(url: string): boolean {
   return isURL(url, {
     protocols: ["http", "https"],
@@ -181,6 +196,13 @@ app.post("/shorten", async (req: Request, res: Response): Promise<Response> => {
 
   if (custom_alias) {
     custom_alias = custom_alias.toLowerCase();
+
+    if (isReserved(custom_alias)) {
+      return res
+        .status(403)
+        .json({ error: "This custom alias is reserved and cannot be used." });
+    }
+
     if (!isValidCustomAlias(custom_alias)) {
       return res.status(400).json({ error: "Invalid custom alias format" });
     }
@@ -197,7 +219,7 @@ app.post("/shorten", async (req: Request, res: Response): Promise<Response> => {
 
     short_code = custom_alias;
   } else {
-    short_code = await generateUniqueSlug(7);
+    short_code = (await generateUniqueSlug(7)).toLowerCase();
   }
 
   const { data, error } = await supabase
@@ -214,6 +236,23 @@ app.post("/shorten", async (req: Request, res: Response): Promise<Response> => {
     short_url: `http://localhost:3000/${data.short_code}`,
     expires_at_utc: expiration?.toISOString(),
   });
+});
+
+// Stats endpoint
+app.get("/stats/:slug", async (req: Request, res: Response) => {
+  const slug = req.params.slug.toLowerCase();
+
+  const { data, error } = await supabase
+    .from("urls")
+    .select("*")
+    .eq("short_code", slug)
+    .single();
+
+  if (error || !data) {
+    return res.status(404).json({ message: "URL not found" });
+  }
+
+  res.status(200).json({ stats: data });
 });
 
 // Redirect route
