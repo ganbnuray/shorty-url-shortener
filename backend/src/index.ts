@@ -7,6 +7,7 @@ import cron from "node-cron";
 import isURL from "validator/lib/isURL";
 import { nanoid } from "nanoid";
 import { createClient as createRedisClient } from "redis";
+import QRCode from "qrcode";
 
 declare global {
   namespace Express {
@@ -276,8 +277,42 @@ app.post(
       return res.status(500).json({ error: error.message });
     }
 
+    // Generate QR Code Image
+    const shortUrl = `http://localhost:3000/${data.short_code}`;
+    const qrBuffer = await QRCode.toBuffer(shortUrl);
+
+    // Upload to Supabase Bucket
+    const filePath = `qr/${data.short_code}.png`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("qrcodes")
+      .upload(filePath, qrBuffer, {
+        contentType: "image/png",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error("QR Upload Failed:", uploadError.message);
+    }
+
+    // Generate public URL
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("qrcodes").getPublicUrl(filePath);
+
+    // Update the row with qr_code_url
+    const { error: updateError } = await supabase
+      .from("urls")
+      .update({ qr_code_url: publicUrl })
+      .eq("short_code", data.short_code);
+
+    if (updateError) {
+      console.error("Failed to update qr_code_url:", updateError.message);
+    }
+
     return res.status(201).json({
       short_url: `http://localhost:3000/${data.short_code}`,
+      qr_code_url: publicUrl,
       expires_at_utc: expiration?.toISOString(),
     });
   }
@@ -334,21 +369,51 @@ app.get("/:slug", async (req, res): Promise<any> => {
   res.redirect(data.original_url);
 });
 
-// Scheduled cleanup
 cron.schedule("*/2 * * * *", async () => {
   const now = new Date().toISOString();
   console.log(`🔍 Checking for expired URLs at ${now}`);
 
-  const { data, error } = await supabase
+  // 1. First, fetch the expired URLs with their short_code
+  const { data: expiredUrls, error: fetchError } = await supabase
     .from("urls")
-    .delete()
-    .lt("expires_at", now)
-    .select("*");
+    .select("short_code")
+    .lt("expires_at", now);
 
-  if (error) {
-    console.error("❌ Error deleting expired URLs:", error.message);
+  if (fetchError) {
+    console.error("❌ Error fetching expired URLs:", fetchError.message);
+    return;
+  }
+
+  // 2. If any expired, try to delete the QR images from storage
+  if (expiredUrls && expiredUrls.length > 0) {
+    const qrPaths = expiredUrls.map((url) => `qr/${url.short_code}.png`);
+
+    const { error: storageError } = await supabase.storage
+      .from("qrcodes")
+      .remove(qrPaths);
+
+    if (storageError) {
+      console.error("❌ Error deleting QR codes:", storageError.message);
+    } else {
+      console.log(`🧹 Deleted ${qrPaths.length} QR code image(s)`);
+    }
+
+    // 3. Then delete the rows from the "urls" table
+    const { error: deleteError } = await supabase
+      .from("urls")
+      .delete()
+      .in(
+        "short_code",
+        expiredUrls.map((url) => url.short_code)
+      );
+
+    if (deleteError) {
+      console.error("❌ Error deleting expired URL rows:", deleteError.message);
+    } else {
+      console.log(`✅ Deleted ${expiredUrls.length} expired URL(s)`);
+    }
   } else {
-    console.log(`✅ Deleted ${data?.length || 0} expired URLs.`);
+    console.log("ℹ️ No expired URLs found.");
   }
 });
 
