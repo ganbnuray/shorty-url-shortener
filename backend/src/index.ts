@@ -160,6 +160,62 @@ function convertLocalToUTC(localTimeString: string, timezone: string): Date {
   }
 }
 
+// Unified expiry validation
+
+type RelativeExpiry = { count: number; unit: string };
+
+function validateAndComputeExpiry(
+  expires_at?: string,
+  timezone?: string,
+  relative_expiry?: RelativeExpiry
+): Date | null {
+  const now = new Date();
+
+  // Constants for min and max expiry in milliseconds
+  const MIN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+  const MAX_EXPIRY_MS = 3 * 30 * 24 * 60 * 60 * 1000; // approx 3 months
+
+  let expiration: Date | null = null;
+
+  if (expires_at) {
+    const effectiveTimezone = timezone || "UTC";
+    expiration = convertLocalToUTC(expires_at, effectiveTimezone);
+
+    if (isNaN(expiration.getTime())) {
+      throw new Error("Invalid expires_at format");
+    }
+
+    // NEW: Check explicitly that expiration is in the future
+    if (expiration <= now) {
+      throw new Error("Expiration time must be in the future");
+    }
+  } else if (relative_expiry) {
+    const { count, unit } = relative_expiry;
+
+    if (
+      !["minutes", "hours", "days", "months", "years"].includes(unit) ||
+      isNaN(count)
+    ) {
+      throw new Error("Invalid relative_expiry format");
+    }
+
+    expiration = add(now, { [unit]: count });
+  } else {
+    // No expiry specified - no expiration
+    return null;
+  }
+
+  const durationMs = expiration.getTime() - now.getTime();
+
+  if (durationMs < MIN_EXPIRY_MS || durationMs > MAX_EXPIRY_MS) {
+    throw new Error(
+      "Expiry duration out of bounds: minimum 1 hour, maximum 3 months"
+    );
+  }
+
+  return expiration;
+}
+
 async function rateLimiter(req: Request, res: Response, next: any) {
   try {
     const ip = req.ip || req.connection.remoteAddress || "unknown";
@@ -222,29 +278,13 @@ async function shortenUrl({
   }
 
   const effectiveTimezone = timezone || req.userTimezone || "UTC";
-  let expiration: Date | null = null;
 
-  if (expires_at) {
-    expiration = convertLocalToUTC(expires_at, effectiveTimezone);
-    if (isNaN(expiration.getTime())) {
-      throw new Error("Invalid expires_at format");
-    }
-    if (expiration <= new Date()) {
-      throw new Error("Expiration time must be in the future");
-    }
-  } else if (relative_expiry) {
-    const now = new Date();
-    const { count, unit } = relative_expiry;
-
-    if (
-      !["days", "months", "years", "minutes", "hours"].includes(unit) ||
-      isNaN(count)
-    ) {
-      throw new Error("Invalid relative_expiry format");
-    }
-
-    expiration = add(now, { [unit]: count });
-  }
+  // Use the new unified expiry validation function here
+  const expiration = validateAndComputeExpiry(
+    expires_at,
+    effectiveTimezone,
+    relative_expiry
+  );
 
   let short_code: string;
 
@@ -332,6 +372,7 @@ function mapErrorMessageToStatusCode(msg: string): number {
     case "Expiration time must be in the future": // 400
     case "Invalid relative_expiry format": // 400
     case "Invalid custom alias format": // 400
+    case "Expiry duration out of bounds: minimum 1 hour, maximum 3 months":
       return 400;
 
     case "This custom alias is reserved and cannot be used.": // 403
@@ -344,135 +385,6 @@ function mapErrorMessageToStatusCode(msg: string): number {
       return 500;
   }
 }
-
-// Shorten URL route
-// app.post(
-//   "/shorten",
-//   rateLimiter,
-//   async (req: Request, res: Response): Promise<Response> => {
-//     let { original_url, expires_at, relative_expiry, timezone, custom_alias } =
-//       req.body;
-
-//     if (!original_url) {
-//       return res.status(400).json({ error: "Missing original_url" });
-//     }
-
-//     // Normalize and validate URL
-//     original_url = normalizeUrl(original_url);
-
-//     if (!isValidUrl(original_url)) {
-//       return res.status(400).json({ error: "Invalid URL format" });
-//     }
-
-//     const effectiveTimezone = timezone || req.userTimezone || "UTC";
-//     let expiration: Date | null = null;
-
-//     if (expires_at) {
-//       expiration = convertLocalToUTC(expires_at, effectiveTimezone);
-//       if (isNaN(expiration.getTime())) {
-//         return res.status(400).json({ error: "Invalid expires_at format" });
-//       }
-//       if (expiration <= new Date()) {
-//         return res
-//           .status(400)
-//           .json({ error: "Expiration time must be in the future" });
-//       }
-//     } else if (relative_expiry) {
-//       const now = new Date();
-//       const { count, unit } = relative_expiry;
-
-//       if (
-//         !["days", "months", "years", "minutes", "hours"].includes(unit) ||
-//         isNaN(count)
-//       ) {
-//         return res
-//           .status(400)
-//           .json({ error: "Invalid relative_expiry format" });
-//       }
-
-//       expiration = add(now, { [unit]: count });
-//     }
-
-//     let short_code: string;
-
-//     if (custom_alias) {
-//       custom_alias = custom_alias.toLowerCase();
-
-//       if (isReserved(custom_alias)) {
-//         return res
-//           .status(403)
-//           .json({ error: "This custom alias is reserved and cannot be used." });
-//       }
-
-//       if (!isValidCustomAlias(custom_alias)) {
-//         return res.status(400).json({ error: "Invalid custom alias format" });
-//       }
-
-//       const { data: existingAlias } = await supabase
-//         .from("urls")
-//         .select("id")
-//         .eq("short_code", custom_alias)
-//         .maybeSingle();
-
-//       if (existingAlias) {
-//         return res.status(409).json({ error: "Custom alias already in use" });
-//       }
-
-//       short_code = custom_alias;
-//     } else {
-//       short_code = (await generateUniqueSlug(7)).toLowerCase();
-//     }
-
-//     const { data, error } = await supabase
-//       .from("urls")
-//       .insert([{ original_url, short_code, expires_at: expiration }])
-//       .select()
-//       .single();
-
-//     if (error) {
-//       return res.status(500).json({ error: error.message });
-//     }
-
-//     // Generate QR Code Image
-//     const shortUrl = `http://localhost:3000/${data.short_code}`;
-//     const qrBuffer = await QRCode.toBuffer(shortUrl);
-
-//     // Upload to Supabase Bucket
-//     const filePath = `qr/${data.short_code}.png`;
-
-//     const { error: uploadError } = await supabase.storage
-//       .from("qrcodes")
-//       .upload(filePath, qrBuffer, {
-//         contentType: "image/png",
-//         upsert: true,
-//       });
-
-//     if (uploadError) {
-//       console.error("QR Upload Failed:", uploadError.message);
-//     }
-
-//     // Generate public URL
-//     const {
-//       data: { publicUrl },
-//     } = supabase.storage.from("qrcodes").getPublicUrl(filePath);
-
-//     // Update the row with qr_code_url
-//     const { error: updateError } = await supabase
-//       .from("urls")
-//       .update({ qr_code_url: publicUrl })
-//       .eq("short_code", data.short_code);
-
-//     if (updateError) {
-//       console.error("Failed to update qr_code_url:", updateError.message);
-//     }
-
-//     return res.status(201).json({
-//       short_url: `http://localhost:3000/${data.short_code}`,
-//       qr_code_url: publicUrl,
-//       expires_at_utc: expiration?.toISOString(),
-//     });
-//   }
-// );
 
 app.post("/shorten", rateLimiter, async (req: Request, res: Response) => {
   try {
@@ -573,7 +485,7 @@ app.get("/:slug", async (req, res): Promise<any> => {
 });
 
 // Cron DB cleaning
-cron.schedule("*/2 * * * *", async () => {
+cron.schedule("0 */8 * * *", async () => {
   const now = new Date().toISOString();
   console.log(`🔍 Checking for expired URLs at ${now}`);
 
