@@ -81,13 +81,16 @@ export function TimezoneCombobox({
         <Button
           variant="outline"
           role="combobox"
-          className="w-full justify-between"
+          className="w-full justify-between truncate"
         >
-          {value
-            ? `${value} (${
-                timezones.find((tz) => tz.name === value)?.currentTimeFormat
-              })`
-            : "Select timezone"}
+          <span className="truncate max-w-[85%] text-left">
+            {value
+              ? `${value} (${
+                  timezones.find((tz) => tz.name === value)
+                    ?.currentTimeFormat ?? "default"
+                })`
+              : "Select timezone"}
+          </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
