@@ -539,3 +539,7 @@ cron.schedule("0 */8 * * *", async () => {
 app.listen(PORT, () => {
   console.log(`✅ Backend server is running at http://localhost:${PORT}`);
 });
+
+app.get("/", (req, res) => {
+  res.send("Backend is running!");
+});
