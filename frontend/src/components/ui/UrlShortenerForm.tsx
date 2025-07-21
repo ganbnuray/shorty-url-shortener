@@ -44,6 +44,7 @@ export default function ShortenForm() {
     qr_code_url: string;
     expires_at_utc?: string;
   } | null>(null);
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
   function getExpiryIso() {
     if (!date) return null;
@@ -89,7 +90,7 @@ export default function ShortenForm() {
     }
 
     try {
-      const res = await fetch("http://localhost:3000/shorten", {
+      const res = await fetch(`${API_BASE_URL}/shorten`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
