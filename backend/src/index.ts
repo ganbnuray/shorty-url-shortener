@@ -327,9 +327,9 @@ async function shortenUrl({
   }
 
   // Generate QR Code Image
-  const BACKEND_PUBLIC_URL =
-    process.env.BACKEND_PUBLIC_URL || "http://localhost:3000";
-  const shortUrl = `https://${BACKEND_PUBLIC_URL}/${data.short_code}`;
+  const FRONTEND_PUBLIC_URL =
+    process.env.FRONTEND_PUBLIC_URL || "https://shorty-linky.vercel.app";
+  const shortUrl = `https://${FRONTEND_PUBLIC_URL}/${data.short_code}`;
 
   const qrBuffer = await QRCode.toBuffer(shortUrl);
 
