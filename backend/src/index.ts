@@ -327,7 +327,10 @@ async function shortenUrl({
   }
 
   // Generate QR Code Image
-  const shortUrl = `http://localhost:3000/${data.short_code}`;
+  const BACKEND_PUBLIC_URL =
+    process.env.BACKEND_PUBLIC_URL || "http://localhost:3000";
+  const shortUrl = `${BACKEND_PUBLIC_URL}/${data.short_code}`;
+
   const qrBuffer = await QRCode.toBuffer(shortUrl);
 
   // Upload to Supabase Bucket
