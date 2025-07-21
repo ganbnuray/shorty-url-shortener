@@ -9,6 +9,7 @@ const isURL = validator.isURL;
 import { nanoid } from "nanoid";
 import { createClient as createRedisClient } from "redis";
 import QRCode from "qrcode";
+dotenv.config();
 
 declare global {
   namespace Express {
@@ -49,7 +50,7 @@ const MAX_REQUESTS_PER_WINDOW = 20; // max requests per IP per window
 
 // Supabase client
 const supabase = createClient(
-  process.env.VITE_SUPABASE_URL!,
+  process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
