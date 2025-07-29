@@ -27,10 +27,16 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(
   cors({
-    origin: process.env.FRONTEND_PUBLIC_URL!, // frontend origin
-    credentials: true,
+    origin: [
+      "https://shorty-linky.vercel.app", // Production
+      "http://localhost:3000",
+      "http://localhost:5173", // Vite default
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 app.use(express.json());
 
 // Timezone middleware
