@@ -25,7 +25,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_PUBLIC_URL!, // frontend origin
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // Timezone middleware
@@ -456,7 +461,7 @@ app.get("/stats/:slug", async (req: Request, res: Response) => {
 });
 
 // Redirect route
-app.get("/:slug", async (req, res): Promise<any> => {
+app.get("/:slug", async (req, res) => {
   const { slug } = req.params;
 
   const { data, error } = await supabase
@@ -465,28 +470,26 @@ app.get("/:slug", async (req, res): Promise<any> => {
     .eq("short_code", slug)
     .single();
 
-  if (error || !data) return res.status(404).json({ error: "Not found" });
+  if (error || !data) {
+    return res.status(404).json({ error: "Not found" });
+  }
 
   const now = new Date();
   if (data.expires_at && new Date(data.expires_at) < now) {
-    console.log(
-      `🚫 URL ${slug} expired at ${
-        data.expires_at
-      }, current time: ${now.toISOString()}`
-    );
     return res.status(410).json({ error: "This link has expired." });
   }
 
-  const { error: updateError } = await supabase
+  supabase
     .from("urls")
     .update({ clicks: (data.clicks || 0) + 1 })
-    .eq("short_code", slug);
+    .eq("short_code", slug)
+    .then(({ error: updateError }) => {
+      if (updateError) {
+        console.error("Failed to update click count:", updateError.message);
+      }
+    });
 
-  if (updateError) {
-    console.error("Failed to update click count:", updateError.message);
-  }
-
-  res.redirect(data.original_url);
+  return res.json({ original_url: data.original_url });
 });
 
 // Cron DB cleaning
