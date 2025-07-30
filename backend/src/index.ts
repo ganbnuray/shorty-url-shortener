@@ -575,6 +575,6 @@ app.listen(PORT, () => {
   console.log(`✅ Backend server is running at http://localhost:${PORT}`);
 });
 
-app.get("/", (req, res) => {
-  res.send("Backend is running!");
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
 });
