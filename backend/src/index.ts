@@ -576,5 +576,5 @@ app.listen(PORT, () => {
 });
 
 app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+  res.status(200).json({ status: "ok" });
 });
