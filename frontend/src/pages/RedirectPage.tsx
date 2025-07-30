@@ -9,7 +9,7 @@ function RedirectPage() {
   useEffect(() => {
     const redirect = async () => {
       try {
-        const res = await fetch(`http://localhost:3000/${slug}`, {
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/${slug}`, {
           headers: {
             Accept: "application/json",
           },
