@@ -24,6 +24,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 // Middleware
 app.use(
   cors({
@@ -74,6 +78,7 @@ const RESERVED_WORDS = new Set([
   "shorten",
   "auth",
   "logout",
+  "health",
 ]);
 
 function isReserved(word: string): boolean {
@@ -470,6 +475,11 @@ app.get("/stats/:slug", async (req: Request, res: Response) => {
 app.get("/:slug", async (req, res) => {
   const { slug } = req.params;
 
+  if (RESERVED_WORDS.has(slug.toLowerCase())) {
+    // If the slug is a reserved word, send 404 or some other response
+    return res.status(404).json({ error: "Not found" });
+  }
+
   const { data, error } = await supabase
     .from("urls")
     .select("original_url, clicks, expires_at")
@@ -573,8 +583,4 @@ cron.schedule("0 */8 * * *", async () => {
 // Start server
 app.listen(PORT, () => {
   console.log(`✅ Backend server is running at http://localhost:${PORT}`);
-});
-
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok" });
 });

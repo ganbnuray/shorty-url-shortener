@@ -1,12 +1,3 @@
 {
-  "rewrites": [
-    {
-      "source": "/health",
-      "destination": "https://shorty-url-shortener-production.up.railway.app/health"
-    },
-    {
-      "source": "/:slug",
-      "destination": "https://shorty-url-shortener-production.up.railway.app/:slug"
-    }
-  ]
+  "rewrites": [{ "source": "/:slug", "destination": "/" }]
 }
