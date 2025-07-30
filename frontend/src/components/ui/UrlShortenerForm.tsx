@@ -24,6 +24,7 @@ import {
 import { TimezoneCombobox } from "@/components/ui/timezone-combobox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, CheckCircle } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 export default function ShortenForm() {
   const [originalUrl, setOriginalUrl] = useState("");
@@ -44,6 +45,8 @@ export default function ShortenForm() {
     qr_code_url: string;
     expires_at_utc?: string;
   } | null>(null);
+  const [loading, setLoading] = useState(false);
+
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
   function getExpiryIso() {
@@ -58,6 +61,7 @@ export default function ShortenForm() {
     e.preventDefault();
     setError(null);
     setSuccessData(null);
+    setLoading(true);
 
     if (!originalUrl) {
       setError("Please enter a URL to shorten.");
@@ -109,6 +113,8 @@ export default function ShortenForm() {
       });
     } catch (err: any) {
       setError(err.message || "Failed to connect to the server.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -297,8 +303,15 @@ export default function ShortenForm() {
           </Alert>
         )}
 
-        <Button type="submit" className="mt-4 w-full">
-          Shorten
+        <Button type="submit" className="mt-4 w-full" disabled={loading}>
+          {loading ? (
+            <>
+              <Loader2 className="animate-spin mr-2 h-4 w-4" />
+              Shortening...
+            </>
+          ) : (
+            "Shorten"
+          )}
         </Button>
       </form>
 
