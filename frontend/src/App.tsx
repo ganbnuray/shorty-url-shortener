@@ -9,9 +9,9 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
-        <Route path="/:slug" element={<RedirectPage />} />
         <Route path="/not-found" element={<NotFoundPage />} />
         <Route path="/expired" element={<ExpiredPage />} />
+        <Route path="/:slug" element={<RedirectPage />} />
       </Routes>
     </BrowserRouter>
   );

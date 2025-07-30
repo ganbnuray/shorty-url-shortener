@@ -12,7 +12,6 @@ function RedirectPage() {
         const res = await fetch(`http://localhost:3000/${slug}`, {
           headers: {
             Accept: "application/json",
-            "X-Requested-With": "XMLHttpRequest",
           },
         });
 

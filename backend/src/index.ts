@@ -477,14 +477,29 @@ app.get("/:slug", async (req, res) => {
     .single();
 
   if (error || !data) {
-    return res.status(404).json({ error: "Not found" });
+    // Check if it's an API request
+    if (
+      req.headers.accept?.includes("application/json") ||
+      req.headers["x-requested-with"]
+    ) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    // For browser requests, redirect to your React app's 404 page
+    return res.redirect("/not-found");
   }
 
   const now = new Date();
   if (data.expires_at && new Date(data.expires_at) < now) {
-    return res.status(410).json({ error: "This link has expired." });
+    if (
+      req.headers.accept?.includes("application/json") ||
+      req.headers["x-requested-with"]
+    ) {
+      return res.status(410).json({ error: "This link has expired." });
+    }
+    return res.redirect("/expired");
   }
 
+  // Update click count
   supabase
     .from("urls")
     .update({ clicks: (data.clicks || 0) + 1 })
@@ -495,9 +510,17 @@ app.get("/:slug", async (req, res) => {
       }
     });
 
-  return res.json({ original_url: data.original_url });
-});
+  // Check if it's an API request
+  if (
+    req.headers.accept?.includes("application/json") ||
+    req.headers["x-requested-with"]
+  ) {
+    return res.json({ original_url: data.original_url });
+  }
 
+  // For browser requests, redirect directly
+  return res.redirect(data.original_url);
+});
 // Cron DB cleaning
 cron.schedule("0 */8 * * *", async () => {
   const now = new Date().toISOString();
