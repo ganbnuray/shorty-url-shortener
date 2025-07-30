@@ -485,7 +485,7 @@ app.get("/:slug", async (req, res) => {
       return res.status(404).json({ error: "Not found" });
     }
     // For browser requests, redirect to your React app's 404 page
-    return res.redirect("/not-found");
+    return res.redirect(`${process.env.FRONTEND_PUBLIC_URL}/not-found`);
   }
 
   const now = new Date();
@@ -496,7 +496,7 @@ app.get("/:slug", async (req, res) => {
     ) {
       return res.status(410).json({ error: "This link has expired." });
     }
-    return res.redirect("/expired");
+    return res.redirect(`${process.env.FRONTEND_PUBLIC_URL}/expired`);
   }
 
   // Update click count
